@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::config::{MAX_SYSCALL_NUM, PAGE_SIZE};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -23,6 +24,7 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::mm::{MapPermission, VirtAddr, VirtPageNum};
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -153,6 +155,102 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn cnt_syscall(&self, syscall_id: usize) {
+        let inner = &mut *TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = &mut *TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+
+        inner.tasks[current].syscall_times
+    }
+
+    fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        if start & (PAGE_SIZE - 1) != 0 {
+            println!("mmap failed: start address is not page-aligned");
+            return -1;
+        }
+
+        if port > 7usize || port == 0 {
+            println!("mmap failed: invalid port number");
+            return -1;
+        }
+
+        let mut inner = self.inner.exclusive_access();
+        let task_id = inner.current_task;
+        let memory_set = &mut inner.tasks[task_id].memory_set;
+
+        let start_vaddr = VirtAddr(start);
+        let end_vaddr = VirtAddr(start + len);
+        let start_vpn = VirtPageNum::from(start_vaddr);
+        let end_vpn = VirtPageNum::from(end_vaddr.ceil());
+
+        for vpn in start_vpn.0 .. end_vpn.0 {
+            if let Some(pte) = memory_set.translate(VirtPageNum(vpn)) {
+                if pte.is_valid() {
+                    println!("mmap failed: address already mapped");
+                    return -1;
+                }
+            }
+        }
+
+        let permission = MapPermission::from_bits((port as u8) << 1).unwrap()| MapPermission::U;
+        memory_set.insert_framed_area(start_vaddr, end_vaddr, permission);
+        0
+    }
+
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        if start & (PAGE_SIZE - 1) != 0 {
+            println!("munmap failed: start address is not page-aligned");
+            return -1;
+        }
+
+        let mut inner = self.inner.exclusive_access();
+        let task_id = inner.current_task;
+        let memory_set = &mut inner.tasks[task_id].memory_set;
+
+        let start_vaddr = VirtAddr(start);
+        let end_vaddr = VirtAddr(start + len);
+        let start_vpn = VirtPageNum::from(start_vaddr);
+        let end_vpn = VirtPageNum::from(end_vaddr.ceil());
+
+        for vpn in start_vpn.0 .. end_vpn.0 {
+            if let Some(pte) = memory_set.translate(VirtPageNum(vpn)) {
+                if !pte.is_valid() {
+                    println!("munmap failed: address not mapped");
+                    return -1;
+                }
+            }
+        }
+
+        memory_set.unmap(start_vaddr, end_vaddr);
+        0
+    }
+}
+
+/// count syscall times
+pub fn cnt_syscall(syscall_num: usize) {
+    TASK_MANAGER.cnt_syscall(syscall_num);
+}
+
+/// get syscall times
+pub fn get_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_syscall_times()
+}
+
+/// mmap
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+
+/// munmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }
 
 /// Run the first task in task list.

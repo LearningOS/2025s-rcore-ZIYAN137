@@ -19,10 +19,34 @@ pub use memory_set::remap_test;
 pub use memory_set::{kernel_stack_position, MapPermission, MemorySet, KERNEL_SPACE};
 pub use page_table::{translated_byte_buffer, PageTableEntry};
 pub use page_table::{PTEFlags, PageTable};
+use crate::task::current_user_token;
 
 /// initiate heap allocator, frame allocator and kernel space
 pub fn init() {
     heap_allocator::init_heap();
     frame_allocator::init_frame_allocator();
     KERNEL_SPACE.exclusive_access().activate();
+}
+
+/// translate VirtAddr to PhysAddr
+pub fn virt_to_phys(vaddr: VirtAddr) -> Result<PhysAddr, &'static str> {
+    let offset = vaddr.page_offset();
+    let vpn = vaddr.floor();
+    let ppn = PageTable::from_token(current_user_token()).translate(vpn)
+        .map(|pte| pte.ppn());
+    if let Some(ppn) = ppn {
+        return Ok(PhysAddr::from(usize::from(PhysAddr::from(ppn)) | offset))
+    } else {
+        Err("virt_to_phys failed")
+    }
+}
+
+/// get PTE flags
+pub fn get_flags(vaddr: VirtAddr) -> Result<PTEFlags, &'static str> {
+    let vpn = vaddr.floor();
+    if let Some(pte) = PageTable::from_token(current_user_token()).translate(vpn) {
+        return Ok(pte.flags())
+    } else {
+        Err("get_flags failed")
+    }
 }
