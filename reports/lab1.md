@@ -34,7 +34,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
 }
 ```
 
-最后实现 `sys_trace` 
+最后实现 `sys_trace` 即可
 
 # 简答作业
 ## Q1
