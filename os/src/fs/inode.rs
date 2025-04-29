@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -53,6 +53,17 @@ impl OSInode {
         }
         v
     }
+
+    /// linkat
+    pub fn linkat(&self, old_name: &str, new_name: &str) -> isize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.linkat(old_name, new_name)
+    }
+    /// unlinkat
+    pub fn unlinkat(&self, name: &str) -> isize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.unlinkat(name)
+    }
 }
 
 lazy_static! {
@@ -60,6 +71,21 @@ lazy_static! {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
     };
+}
+
+/// get nlink
+pub fn get_nlink(ino: usize) -> usize {
+    ROOT_INODE.get_nlink(ino)
+}
+
+/// link at
+pub fn linkat(old_name: &str, new_name: &str) -> isize {
+    ROOT_INODE.linkat(old_name, new_name)
+}
+
+/// unlinkat
+pub fn unlinkat(name: &str) -> isize {
+    ROOT_INODE.unlinkat(name)
 }
 
 /// List all apps in the root directory
@@ -155,5 +181,17 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn get_inode_id(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.get_inode_id()
+    }
+    fn get_mode(&self) -> StatMode {
+        let inner = self.inner.exclusive_access();
+        if inner.inode.is_dir() {
+            StatMode::DIR
+        } else {
+            StatMode::FILE
+        }
     }
 }
