@@ -9,6 +9,8 @@ use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
+use crate::config::{BIG_STRIDE, PAGE_SIZE};
+use crate::mm::{VirtAddr, VirtPageNum, MapPermission};
 use alloc::sync::Arc;
 use lazy_static::*;
 
@@ -44,10 +46,78 @@ impl Processor {
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
     }
+
+    fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        if start & (PAGE_SIZE - 1) != 0 {
+            println!("mmap failed: start address is not page-aligned");
+            return -1;
+        }
+
+        if port > 7usize || port == 0 {
+            println!("mmap failed: invalid port number");
+            return -1;
+        }
+
+        let memory_set = &mut self.current.as_ref().unwrap().inner_exclusive_access().memory_set;
+
+        let start_vaddr = VirtAddr(start);
+        let end_vaddr = VirtAddr(start + len);
+        let start_vpn = VirtPageNum::from(start_vaddr);
+        let end_vpn = VirtPageNum::from(end_vaddr.ceil());
+
+        for vpn in start_vpn.0 .. end_vpn.0 {
+            if let Some(pte) = memory_set.translate(VirtPageNum(vpn)) {
+                if pte.is_valid() {
+                    println!("mmap failed: address already mapped");
+                    return -1;
+                }
+            }
+        }
+
+        let permission = MapPermission::from_bits((port as u8) << 1).unwrap()| MapPermission::U;
+        memory_set.insert_framed_area(start_vaddr, end_vaddr, permission);
+        0
+    }
+
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        if start & (PAGE_SIZE - 1) != 0 {
+            println!("munmap failed: start address is not page-aligned");
+            return -1;
+        }
+
+        let memory_set = &mut self.current.as_ref().unwrap().inner_exclusive_access().memory_set;
+
+        let start_vaddr = VirtAddr(start);
+        let end_vaddr = VirtAddr(start + len);
+        let start_vpn = VirtPageNum::from(start_vaddr);
+        let end_vpn = VirtPageNum::from(end_vaddr.ceil());
+
+        for vpn in start_vpn.0 .. end_vpn.0 {
+            if let Some(pte) = memory_set.translate(VirtPageNum(vpn)) {
+                if !pte.is_valid() {
+                    println!("munmap failed: address not mapped");
+                    return -1;
+                }
+            }
+        }
+
+        memory_set.unmap(start_vaddr, end_vaddr);
+        0
+    }
 }
 
 lazy_static! {
     pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe { UPSafeCell::new(Processor::new()) };
+}
+
+/// mmap
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    PROCESSOR.exclusive_access().mmap(start, len, port)
+}
+
+/// munmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    PROCESSOR.exclusive_access().munmap(start, len)
 }
 
 ///The main part of process execution and scheduling
@@ -61,6 +131,10 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+
+            let pass = BIG_STRIDE / task_inner.get_priority();
+            let task_stride = task_inner.get_stride();
+            task_inner.stride = task_stride.wrapping_sub(pass);
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
