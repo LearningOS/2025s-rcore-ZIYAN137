@@ -18,5 +18,7 @@ pub const PAGE_SIZE_BITS: usize = 0xc;
 pub const TRAMPOLINE: usize = usize::MAX - PAGE_SIZE + 1;
 /// the virtual addr of trap context
 pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
+/// magic number of deadlock
+pub const DEAD: isize = -0xDEAD;
 /// qemu board info
 pub use crate::board::{CLOCK_FREQ, MMIO};
